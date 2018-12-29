@@ -1,11 +1,11 @@
 package ratelimit
 
 import (
-	"github.com/go-redis/redis"
-	"fmt"
 	"crypto/sha1"
-	"time"
+	"fmt"
+	"github.com/go-redis/redis"
 	"sync"
+	"time"
 )
 
 // time_unit is the second of unit
@@ -36,15 +36,23 @@ redis.call("EXPIRE", key, duration_secs * 3)
 return increment
 `
 
+type bucket struct {
+	keyPrefix string
+	N         int64
+}
+
 type RedisRateLimiter struct {
-	sync.Mutex
-	redisClient  *redis.Client
-	scriptSHA1   string
-	keyPrefix          string
+	redisClient *redis.Client
+	scriptSHA1  string
+	// config
 	durationSecs int
 	throughput   int
 	batchSize    int
-	N            int64
+
+	// fixme replace with lru
+	sync.Mutex
+	keyPrefix string
+	buckets   map[string]*bucket
 }
 
 // duration 精度最小到秒
@@ -60,12 +68,12 @@ func NewRedisRateLimiter(client *redis.Client, keyPrefix string,
 
 	r := &RedisRateLimiter{
 		redisClient:  client,
+		keyPrefix:    keyPrefix,
 		scriptSHA1:   fmt.Sprintf("%x", sha1.Sum([]byte(SCRIPT))),
-		keyPrefix:          keyPrefix,
 		durationSecs: int(durationSecs),
 		throughput:   throughput,
 		batchSize:    batchSize,
-		N:            0,
+		buckets:      make(map[string]*bucket),
 	}
 
 	if !r.redisClient.ScriptExists(r.scriptSHA1).Val()[0] {
@@ -74,32 +82,21 @@ func NewRedisRateLimiter(client *redis.Client, keyPrefix string,
 	return r
 }
 
-func (r *RedisRateLimiter) Take() bool {
-	// 1. 尝试从本地获取
+func (r *RedisRateLimiter) Take(token string, amount int) bool {
 	r.Lock()
-
-	if r.N > 0{
-		r.N = r.N -1
+	b, exist := r.buckets[token]
+	if exist && b.N >= int64(amount) {
+		b.N -= int64(amount)
 		r.Unlock()
 		return true
 	}
 
-	// 尝试从Redis获取
-	count := r.redisClient.EvalSha(
-		r.scriptSHA1,
-		[]string{r.keyPrefix},
-		r.durationSecs,
-		r.throughput,
-		r.batchSize,
-	).Val().(int64)
-
-
-	if count <= 0{
+	count := r.redisClient.EvalSha(r.scriptSHA1, []string{token}, r.durationSecs, r.throughput, r.batchSize, ).Val().(int64)
+	if count <= 0 {
 		r.Unlock()
 		return false
-	}else{
-		r.N = count
-		r.N--
+	} else {
+		b = &bucket{keyPrefix: r.keyPrefix + ":" + token, N: count - 1,}
 		r.Unlock()
 		return true
 	}
