@@ -91,7 +91,13 @@ func (r *RedisRateLimiter) Take(token string, amount int) bool {
 		return true
 	}
 
-	count := r.redisClient.EvalSha(r.scriptSHA1, []string{token}, r.durationSecs, r.throughput, r.batchSize, ).Val().(int64)
+	val, err := r.redisClient.EvalSha(r.scriptSHA1, []string{token}, r.durationSecs, r.throughput, r.batchSize, ).Result()
+	if err != nil {
+		fmt.Printf("redis EvalSha lua failed %v\n", err)
+		return true
+	}
+
+	count := val.(int64)
 	if count <= 0 {
 		return false
 	}
