@@ -96,7 +96,7 @@ func (r *RedisRateLimiter) Take(token string, amount int) bool {
 		r.Unlock()
 		return false
 	} else {
-		b = &bucket{keyPrefix: r.keyPrefix + ":" + token, N: count - 1,}
+		b = &bucket{keyPrefix: r.keyPrefix + ":" + token, N: count - int64(amount)}
 		r.Unlock()
 		return true
 	}
