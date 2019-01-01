@@ -36,6 +36,9 @@ redis.call("EXPIRE", key, duration_secs * 3)
 return increment
 `
 
+var scriptSHA1 string
+var once sync.Once
+
 type bucket struct {
 	keyPrefix string
 	N         int64
@@ -67,24 +70,48 @@ func NewRedisRateLimiter(client *redis.Client, keyPrefix string,
 	}
 
 	r := &RedisRateLimiter{
-		redisClient:  client,
-		keyPrefix:    keyPrefix,
-		scriptSHA1:   fmt.Sprintf("%x", sha1.Sum([]byte(SCRIPT))),
+		redisClient: client,
+		keyPrefix:   keyPrefix,
+		// scriptSHA1:   fmt.Sprintf("%x", sha1.Sum([]byte(SCRIPT))),
 		durationSecs: int(durationSecs),
 		throughput:   throughput,
 		batchSize:    batchSize,
 		buckets:      make(map[string]*bucket),
 	}
 
-	if !r.redisClient.ScriptExists(r.scriptSHA1).Val()[0] {
-		r.scriptSHA1 = r.redisClient.ScriptLoad(SCRIPT).Val()
-	}
+	// if !r.redisClient.ScriptExists(r.scriptSHA1).Val()[0] {
+	// 	r.scriptSHA1 = r.redisClient.ScriptLoad(SCRIPT).Val()
+	// }
 	return r
+}
+
+func (r *RedisRateLimiter) loadScript() error {
+	sha1 := fmt.Sprintf("%x", sha1.Sum([]byte(SCRIPT)))
+
+	exist, err := r.redisClient.ScriptExists(sha1).Result()
+	if err != nil {
+		return err
+	}
+
+	// exist
+	if exist[0] {
+		r.scriptSHA1 = sha1
+		return nil
+	}
+	r.scriptSHA1, err = r.redisClient.ScriptLoad(SCRIPT).Result()
+	return err
 }
 
 func (r *RedisRateLimiter) Take(token string, amount int) (bool, error) {
 	r.Lock()
 	defer r.Unlock()
+
+	if r.scriptSHA1 == "" {
+		if err := r.loadScript(); err != nil {
+			return false, err
+		}
+	}
+
 	b, exist := r.buckets[token]
 	if exist && b.N >= int64(amount) {
 		b.N -= int64(amount)
