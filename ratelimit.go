@@ -82,24 +82,23 @@ func NewRedisRateLimiter(client *redis.Client, keyPrefix string,
 	return r
 }
 
-func (r *RedisRateLimiter) Take(token string, amount int) bool {
+func (r *RedisRateLimiter) Take(token string, amount int) (bool, error) {
 	r.Lock()
 	defer r.Unlock()
 	b, exist := r.buckets[token]
 	if exist && b.N >= int64(amount) {
 		b.N -= int64(amount)
-		return true
+		return true, nil
 	}
 
 	val, err := r.redisClient.EvalSha(r.scriptSHA1, []string{token}, r.durationSecs, r.throughput, r.batchSize, ).Result()
 	if err != nil {
-		fmt.Printf("redis EvalSha lua failed %v\n", err)
-		return true
+		return false, err
 	}
 
 	count := val.(int64)
 	if count <= 0 {
-		return false
+		return false, nil
 	}
 
 	if exist {
@@ -111,7 +110,7 @@ func (r *RedisRateLimiter) Take(token string, amount int) bool {
 
 	if b.N >= int64(amount) {
 		b.N -= int64(amount)
-		return true
+		return true, nil
 	}
-	return false
+	return false, nil
 }
