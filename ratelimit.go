@@ -84,20 +84,28 @@ func NewRedisRateLimiter(client *redis.Client, keyPrefix string,
 
 func (r *RedisRateLimiter) Take(token string, amount int) bool {
 	r.Lock()
+	defer r.Unlock()
 	b, exist := r.buckets[token]
 	if exist && b.N >= int64(amount) {
 		b.N -= int64(amount)
-		r.Unlock()
 		return true
 	}
 
 	count := r.redisClient.EvalSha(r.scriptSHA1, []string{token}, r.durationSecs, r.throughput, r.batchSize, ).Val().(int64)
 	if count <= 0 {
-		r.Unlock()
 		return false
+	}
+
+	if exist {
+		b.N = b.N + count
 	} else {
-		b = &bucket{keyPrefix: r.keyPrefix + ":" + token, N: count - int64(amount)}
-		r.Unlock()
+		b = &bucket{keyPrefix: r.keyPrefix + ":" + token, N: b.N + count}
+		r.buckets[token] = b
+	}
+
+	if b.N >= int64(amount) {
+		b.N -= int64(amount)
 		return true
 	}
+	return false
 }
