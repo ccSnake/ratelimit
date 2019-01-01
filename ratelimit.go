@@ -99,7 +99,7 @@ func (r *RedisRateLimiter) Take(token string, amount int) bool {
 	if exist {
 		b.N = b.N + count
 	} else {
-		b = &bucket{keyPrefix: r.keyPrefix + ":" + token, N: b.N + count}
+		b = &bucket{keyPrefix: r.keyPrefix + ":" + token, N: count}
 		r.buckets[token] = b
 	}
 
