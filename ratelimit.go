@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/garyburd/redigo/redis"
+	"strings"
 	"sync"
 	"time"
 )
@@ -106,6 +107,14 @@ func (r *RateLimiter) Take(token string, amount int) (bool, error) {
 	return false, nil
 }
 
+func (r *RateLimiter) Do(conn redis.Conn, token string) (interface{}, error) {
+	v, err := redis.DoWithTimeout(conn, time.Millisecond*100, "EVALSHA", r.script.Hash(), token, r.timeWindow, r.throughput, r.batchSize)
+	if e, ok := err.(redis.Error); ok && strings.HasPrefix(string(e), "NOSCRIPT ") {
+		v, err = redis.DoWithTimeout(conn, time.Millisecond*100, "EVAL", SCRIPT, token, r.timeWindow, r.throughput, r.batchSize)
+	}
+	return v, err
+}
+
 func (r *RateLimiter) fillBucket(token string) error {
 	ctx, cf := context.WithTimeout(context.TODO(), time.Millisecond*300)
 	defer cf()
@@ -115,7 +124,7 @@ func (r *RateLimiter) fillBucket(token string) error {
 		return err
 	}
 
-	reply, err := redis.Int64s(r.script.Do(conn, token, r.timeWindow, r.throughput, r.batchSize))
+	reply, err := redis.Int64s(r.Do(conn, token))
 	if err != nil {
 		return err
 	}
