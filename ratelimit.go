@@ -79,6 +79,7 @@ func NewLimiter(pool *redis.Pool, keyPrefix string, period time.Duration, throug
 }
 
 func (r *RateLimiter) Take(token string, amount int) (bool, error) {
+	var synced bool
 	r.lock.Lock()
 	defer r.lock.Unlock()
 	b, exist := r.buckets[token]
@@ -87,10 +88,11 @@ func (r *RateLimiter) Take(token string, amount int) (bool, error) {
 			return false, err
 		}
 		b = r.buckets[token]
+		synced = true
 	}
 
 	// exist && valid
-	if b.N < amount {
+	if b.N < amount && !synced {
 		if err := r.fillBucket(token); err != nil {
 			return false, err
 		}
