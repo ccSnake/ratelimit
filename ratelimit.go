@@ -37,9 +37,6 @@ redis.call("EXPIRE", key, time_window * 3)
 return increment,start_tw
 `
 
-var scriptSHA1 string
-var once sync.Once
-
 type bucket struct {
 	keyPrefix string
 	N         int
@@ -55,34 +52,35 @@ type RateLimiter struct {
 	batchSize  int
 
 	// todo replace with lru
-	sync.Mutex
 	keyPrefix string
-	buckets   map[string]*bucket
+
+	lock    sync.Mutex
+	buckets map[string]*bucket
 }
 
 // duration 精度最小到秒
 func NewLimiter(pool *redis.Pool, keyPrefix string, period time.Duration, throughput int, batchSize int) *RateLimiter {
-	timeWindow := period / time.Second
-	if timeWindow < 1 {
-		timeWindow = 1
+	windowSize := period / time.Second
+	if windowSize < 1 {
+		windowSize = 1
 	}
 
 	r := &RateLimiter{
 		pool:       pool,
+		script:     redis.NewScript(1, SCRIPT),
 		keyPrefix:  keyPrefix,
-		timeWindow: int(timeWindow),
+		timeWindow: int(windowSize),
 		throughput: throughput,
 		batchSize:  batchSize,
 		buckets:    make(map[string]*bucket),
-		script:     redis.NewScript(1, SCRIPT),
 	}
 
 	return r
 }
 
 func (r *RateLimiter) Take(token string, amount int) (bool, error) {
-	r.Lock()
-	defer r.Unlock()
+	r.lock.Lock()
+	defer r.lock.Unlock()
 	b, exist := r.buckets[token]
 	if !exist || !b.isValid() {
 		if err := r.fillBucket(token); err != nil {
@@ -132,8 +130,7 @@ func (r *RateLimiter) fillBucket(token string) error {
 	twe := time.Now().Add(time.Duration((tws+1)*r.timeWindow) * time.Second)
 	b, exist := r.buckets[token]
 	if exist {
-		b.N = b.N + int(count)
-		b.DeadTime = twe
+		b.fill(count, twe)
 	} else {
 		r.buckets[token] = &bucket{keyPrefix: r.keyPrefix + ":" + token, N: count, DeadTime: twe}
 	}
@@ -146,4 +143,14 @@ func (b *bucket) isValid() bool {
 		return false
 	}
 	return true
+}
+
+func (b *bucket) fill(amount int, dead time.Time) {
+	if !b.isValid() {
+		b.N = amount
+	} else {
+		b.N += amount
+	}
+
+	b.DeadTime = dead
 }
